@@ -167,7 +167,7 @@ fn main() -> ! {
         .build();
 
     let mut read_buf = [70u8; 1];
-    
+
     // IF we want a 24 MHz PCLK. The only possible configuration is prescaler by 2, and PLL x6.
     // CLKRC Bit[6] must be 0, to enable prescaler.
     // CLKRC Bit[0-5] must be 1, to enable prescaler by 2.
@@ -291,7 +291,7 @@ fn main() -> ! {
                 if d5.is_high() {val = val | 0b00100000};
                 if d6.is_high() {val = val | 0b01000000};
                 if d7.is_high() {val = val | 0b10000000};
-                if val > 190 {
+                if val > 125 {
                     display.set_pixel(x, 64-y, true);
                 } else {
                     display.set_pixel(x, 64-y, false);
