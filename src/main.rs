@@ -1,9 +1,4 @@
-//! Blinks an LED
-//!
-//! This assumes that a LED is connected to pc13 as is the case on the blue pill board.
-//!
-//! Note: Without additional hardware, PC13 should not be used to drive an LED, see page 5.1.2 of
-//! the reference manual for an explanation. This is not an issue on the blue pill.
+//! Example using the OV7670 camera module without FIFO
 
 #![deny(unsafe_code)]
 #![no_std]
@@ -14,10 +9,12 @@ use panic_semihosting as _;
 
 use cortex_m::asm::delay;
 use cortex_m_rt::entry;
-use stm32f1xx_hal::usb::{Peripheral, UsbBus};
 use num_format::{Buffer, Locale};
 
+use nb::block;
+
 use stm32f1xx_hal::{
+    serial::{Config, Serial},
     spi::{Mode as ModeSpi, Phase, Polarity, Spi},
     pac, prelude::*,
     delay::Delay as Delay2,
@@ -34,13 +31,8 @@ use embedded_graphics::{
     text::{Baseline, Text},
 };
 
-// use usbd_serial::{SerialPort, USB_CLASS_CDC};
-// use usb_device::prelude::UsbDeviceBuilder;
-// use usb_device::prelude::UsbVidPid;
-
 use ssd1306::{prelude::*, Ssd1306};
 // use cortex_m_semihosting::hprintln;
-
 
 
 #[entry]
@@ -109,6 +101,20 @@ fn main() -> ! {
         1000,
     );
 
+    // USART1
+    let tx = gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh);
+    let rx = gpioa.pa10;
+
+    // Set up the usart device. Taks ownership over the USART register and tx/rx pins. The rest of
+    // the registers are used to enable and configure the device.
+    let serial = Serial::usart1(
+        dp.USART1,
+        (tx, rx),
+        &mut afio.mapr,
+        Config::default().baudrate(9600.bps()),
+        clocks,
+    );
+
 
     // Display
     // SPI1
@@ -158,8 +164,6 @@ fn main() -> ! {
     let d6 = gpioa.pa12.into_pull_up_input(&mut gpioa.crh);
     let d7 = gpioa.pa11.into_pull_up_input(&mut gpioa.crh);
 
-    let mut flat_frame = [0u8; 90000];
-
     
     let text_style = MonoTextStyleBuilder::new()
         .font(&FONT_6X10)
@@ -168,16 +172,19 @@ fn main() -> ! {
 
     let mut read_buf = [70u8; 1];
 
+    delay(1400);
+    
+
     // IF we want a 24 MHz PCLK. The only possible configuration is prescaler by 2, and PLL x6.
     // CLKRC Bit[6] must be 0, to enable prescaler.
     // CLKRC Bit[0-5] must be 1, to enable prescaler by 2.
-    delay(400);
-    match i2c.write(0x42>>1, &[0x11, 0b00011101]) {
-    // match i2c.write(0x42>>1, &[0x11]) {
+    match i2c.write(0x42>>1, &[0x11, 0b00011111]) {
+    // match i2c.write(0x42>>1, &[0x11, 0b00001111]) { //faster
         Ok(_result) => {
             delay(400);
             match i2c.read(0x43>>1, &mut read_buf) {
                 Ok(_result) => {
+                    delay(100);
                     let mut buf = Buffer::new();
                     buf.write_formatted(&(read_buf[0]), &Locale::en);
                     Text::with_baseline(&buf, Point::zero(), text_style, Baseline::Top).draw(&mut display).unwrap();
@@ -195,6 +202,7 @@ fn main() -> ! {
             delay(400);
             match i2c.read(0x43>>1, &mut read_buf) {
                 Ok(_result) => {
+                    delay(400);
                     let mut buf = Buffer::new();
                     buf.write_formatted(&(read_buf[0]), &Locale::en);
                     Text::with_baseline(&buf, Point::new(20, 0), text_style, Baseline::Top).draw(&mut display).unwrap();
@@ -215,6 +223,7 @@ fn main() -> ! {
             delay(400);
             match i2c.read(0x43>>1, &mut read_buf) {
                 Ok(_result) => {
+                    delay(400);
                     let mut buf = Buffer::new();
                     buf.write_formatted(&(read_buf[0]), &Locale::en);
                     Text::with_baseline(&buf, Point::new(40, 0), text_style, Baseline::Top).draw(&mut display).unwrap();
@@ -228,11 +237,11 @@ fn main() -> ! {
 
     // COM7 Bit[3] must be 1, to use the QCIF format
     match i2c.write(0x42>>1, &[0x12, 0b00001000]) {
-    // match i2c.write(0x42>>1, &[0x12]) {
         Ok(_result) => {
             delay(400);
             match i2c.read(0x43>>1, &mut read_buf) {
                 Ok(_result) => {
+                    delay(400);
                     let mut buf = Buffer::new();
                     buf.write_formatted(&(read_buf[0]), &Locale::en);
                     Text::with_baseline(&buf, Point::new(60, 0), text_style, Baseline::Top).draw(&mut display).unwrap();
@@ -250,61 +259,88 @@ fn main() -> ! {
 
     display.flush().unwrap();
 
+    let (mut tx, mut rx) = serial.split();
+
+    let mut flat_frame = [0u8; 64*128];
+    let mut pclk_count;
+
+    let pixel_val = || {
+        let mut val = 0x00;
+        if d0.is_high() {val = val | 0b00000001};
+        if d1.is_high() {val = val | 0b00000010};
+        if d2.is_high() {val = val | 0b00000100};
+        if d3.is_high() {val = val | 0b00001000};
+        if d4.is_high() {val = val | 0b00010000};
+        if d5.is_high() {val = val | 0b00100000};
+        if d6.is_high() {val = val | 0b01000000};
+        if d7.is_high() {val = val | 0b10000000};
+        return val
+    };
+
     loop {
-        // falling edge of VSYNC signals the
-        // START OF A FRAME
-        loop {
-            if vsync.is_high() {break;}
-        }
-        loop {
-            if vsync.is_low() {break;}
-        }
 
-        for y in 0..64 {
-            // rising edge of HREF signals the start of a line,
-            // and the falling edge of HREF signals the end of the line.
-            // D0-D7 must be sampled only when HREF is high
-            // At this point it shoud be low, so we wait it to rise
-            loop {
-                if href.is_high() {break;}
-            }
-            led.set_low();
-            for x in 0..128 {
-                // at this moment pclk shoud be low or falling
-                // loop {if pclk.is_low() {break;}}
-                
-                // D0-D7 must be sampled at the rising edge of the PCLK signal
-                
-                // ignore only ch 0
-                loop {if pclk.is_high() {break;}}
-                loop {if pclk.is_low() {break;}}
+        match block!(rx.read()) {
+            Ok(_c) => {
+                pclk_count = 0;
 
-                // take ch 1
-                loop {if pclk.is_high() {break;}}
-
-                let mut val = 0x00;
-                if d0.is_high() {val = val | 0b00000001};
-                if d1.is_high() {val = val | 0b00000010};
-                if d2.is_high() {val = val | 0b00000100};
-                if d3.is_high() {val = val | 0b00001000};
-                if d4.is_high() {val = val | 0b00010000};
-                if d5.is_high() {val = val | 0b00100000};
-                if d6.is_high() {val = val | 0b01000000};
-                if d7.is_high() {val = val | 0b10000000};
-                if val > 125 {
-                    display.set_pixel(x, 64-y, true);
-                } else {
-                    display.set_pixel(x, 64-y, false);
+                // falling edge of VSYNC signals the
+                // START OF A FRAME
+                loop {
+                    if vsync.is_high() {break;}
                 }
-                loop {if pclk.is_low() {break;}}
-                
-                // ignore only ch 2
-                loop {if pclk.is_high() {break;}}
-                loop {if pclk.is_low() {break;}}
+                loop {
+                    if vsync.is_low() {break;}
+                }
+
+                for y in 0..64 {
+                    // rising edge of HREF signals the start of a line,
+                    // and the falling edge of HREF signals the end of the line.
+                    // D0-D7 must be sampled only when HREF is high
+                    // At this point it shoud be low, so we wait it to rise
+                    loop {
+                        if href.is_high() {break;}
+                    }
+                    led.set_low();
+                    for x in 0..128 {
+                        // at this moment pclk shoud be low or falling
+                        // loop {if pclk.is_low() {break;}}
+                        
+                        // D0-D7 must be sampled at the rising edge of the PCLK signal
+                        // ignore ch
+                        loop {if pclk.is_high() {break;}}
+                        // let val = pixel_val();
+                        loop {if pclk.is_low() {break;}}
+                        // ignore ch
+                        loop {if pclk.is_high() {break;}}
+                        // let val = pixel_val();
+                        loop {if pclk.is_low() {break;}}
+                        
+                        // take ch 1
+                        loop {if pclk.is_high() {break;}}
+                        let val = pixel_val();
+                        if val > 180 {display.set_pixel(x, 64-y, true);} else {display.set_pixel(x, 64-y, false);}                        
+                        loop {if pclk.is_low() {break;}}
+                        flat_frame[pclk_count] = val;
+                        pclk_count = pclk_count + 1;
+                        
+                        
+
+                    }
+                }
+                led.set_high();
+                display.flush().unwrap();
+
+                for p in flat_frame {
+                    block!(tx.write(p)).ok();
+                }
 
             }
+            Err(_) => {
+                led.set_high();
+                delay(400);
+                led.set_low();
+            }
         }
-        led.set_high();
-        display.flush().unwrap();
+
     }
 }
