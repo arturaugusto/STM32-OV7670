@@ -17,8 +17,7 @@ use stm32f1xx_hal::{
     serial::{Config, Serial},
     spi::{Mode as ModeSpi, Phase, Polarity, Spi},
     pac, prelude::*,
-    delay::Delay as Delay2,
-    timer::{Tim2NoRemap, Timer},
+    timer::{Tim2NoRemap, Timer},//, delay::Delay as Delay2
     i2c::{BlockingI2c, Mode, DutyCycle},
     // pwm::Channel,
 
@@ -33,6 +32,7 @@ use embedded_graphics::{
 
 use ssd1306::{prelude::*, Ssd1306};
 // use cortex_m_semihosting::hprintln;
+use core::fmt::Write;
 
 
 #[entry]
@@ -51,9 +51,9 @@ fn main() -> ! {
     // `clocks`
     let clocks = rcc
         .cfgr
-        .use_hse(8.mhz())
-        .sysclk(56.mhz())
-        .pclk1(28.mhz())
+        .use_hse(8.MHz())
+        .sysclk(56.MHz())
+        .pclk1(28.MHz())
         .freeze(&mut flash.acr);
 
     let mut afio = dp.AFIO.constrain();
@@ -68,8 +68,11 @@ fn main() -> ! {
     // let c4 = gpioa.pa3.into_alternate_push_pull(&mut gpioa.crl);
     let pins = (c1, c2);
 
-    let mut pwm = Timer::tim2(dp.TIM2, &clocks)
-        .pwm::<Tim2NoRemap, _, _, _>(pins, &mut afio.mapr, 10000.khz())
+    // let mut pwm = Timer::new(dp.TIM2, &clocks).pwm(pins, &mut afio.mapr, 10000.kHz());
+
+
+    let mut pwm = Timer::new(dp.TIM2, &clocks)
+        .pwm_hz::<Tim2NoRemap, _, _>(pins, &mut afio.mapr, 9000.kHz())
         .split();
 
     pwm.0.enable();
@@ -91,7 +94,7 @@ fn main() -> ! {
         &mut afio.mapr,
         Mode::Fast {
         // Mode::Standard {
-            frequency: 100_000.hz(),
+            frequency: 100_000.Hz(),
             duty_cycle: DutyCycle::Ratio2to1
         },
         clocks,
@@ -107,14 +110,36 @@ fn main() -> ! {
 
     // Set up the usart device. Taks ownership over the USART register and tx/rx pins. The rest of
     // the registers are used to enable and configure the device.
-    let serial = Serial::usart1(
+    let mut serial = Serial::usart1(
         dp.USART1,
         (tx, rx),
         &mut afio.mapr,
-        Config::default().baudrate(9600.bps()),
+        Config::default().baudrate(38400.bps()),
         clocks,
     );
 
+    
+    let mut pa8_bt_en = gpioa.pa8.into_push_pull_output(&mut gpioa.crh);
+    pa8_bt_en.set_high();
+    delay(400);
+
+    for hx in "AT+UART=57600,1,0\n\r".chars() {
+        let mut b = [0; 1];
+        hx.encode_utf8(&mut b);
+        block!(serial.write(b[0])).unwrap();
+    }
+    delay(400);
+    
+    pa8_bt_en.set_low();
+
+    // loop {}
+
+    
+    
+    block!(serial.reconfigure(Config::default().baudrate(57600.bps()), clocks)).unwrap();
+    delay(400);
+    
+    let (mut tx, mut rx) = serial.split();
 
     // Display
     // SPI1
@@ -122,7 +147,9 @@ fn main() -> ! {
     let miso = gpioa.pa6;
     let mosi = gpioa.pa7.into_alternate_push_pull(&mut gpioa.crl);
 
-    let mut delay2 = Delay2::new(cp.SYST, clocks);
+    // let mut delay2 = Delay2::new(cp.SYST, clocks);
+    let mut delay2 = cp.SYST.delay(&clocks);
+
 
     let mut rst = gpiob.pb0.into_push_pull_output(&mut gpiob.crl);
     let dc = gpiob.pb1.into_push_pull_output(&mut gpiob.crl);
@@ -135,7 +162,7 @@ fn main() -> ! {
             polarity: Polarity::IdleLow,
             phase: Phase::CaptureOnFirstTransition,
         },
-        8.mhz(),
+        8.MHz(),
         clocks,
 
     );
@@ -259,9 +286,10 @@ fn main() -> ! {
 
     display.flush().unwrap();
 
-    let (mut tx, mut rx) = serial.split();
+    const H: usize = 72;
+    const W: usize = 87;
 
-    let mut flat_frame = [0u8; 64*128];
+    let mut flat_frame = [0u8; H*W];
     let mut pclk_count;
 
     let pixel_val = || {
@@ -277,10 +305,14 @@ fn main() -> ! {
         return val
     };
 
+    
+    
+
     loop {
 
         match block!(rx.read()) {
             Ok(_c) => {
+
                 pclk_count = 0;
 
                 // falling edge of VSYNC signals the
@@ -292,7 +324,7 @@ fn main() -> ! {
                     if vsync.is_low() {break;}
                 }
 
-                for y in 0..64 {
+                for y in 0..H {
                     // rising edge of HREF signals the start of a line,
                     // and the falling edge of HREF signals the end of the line.
                     // D0-D7 must be sampled only when HREF is high
@@ -301,37 +333,113 @@ fn main() -> ! {
                         if href.is_high() {break;}
                     }
                     led.set_low();
-                    for x in 0..128 {
+                    for x in 0..W {
                         // at this moment pclk shoud be low or falling
                         // loop {if pclk.is_low() {break;}}
                         
                         // D0-D7 must be sampled at the rising edge of the PCLK signal
-                        // ignore ch
+                        
                         loop {if pclk.is_high() {break;}}
-                        // let val = pixel_val();
-                        loop {if pclk.is_low() {break;}}
-                        // ignore ch
-                        loop {if pclk.is_high() {break;}}
-                        // let val = pixel_val();
+                        // let cb_or_cr_channel = pixel_val();
+                        // flat_frame[pclk_count] = cb_or_cr_channel;
+                        // pclk_count = pclk_count + 1;
                         loop {if pclk.is_low() {break;}}
                         
-                        // take ch 1
                         loop {if pclk.is_high() {break;}}
-                        let val = pixel_val();
-                        if val > 180 {display.set_pixel(x, 64-y, true);} else {display.set_pixel(x, 64-y, false);}                        
-                        loop {if pclk.is_low() {break;}}
-                        flat_frame[pclk_count] = val;
+                        let y_channel = pixel_val();
+                        flat_frame[pclk_count] = y_channel;
                         pclk_count = pclk_count + 1;
+                        loop {if pclk.is_low() {break;}}
                         
-                        
+                        loop {if pclk.is_high() {break;}}
+                        loop {if pclk.is_low() {break;}}
 
+                        loop {if pclk.is_high() {break;}}
+                        loop {if pclk.is_low() {break;}}
+
+                        // display.set_pixel(x as u32, 64-(y as u32), false);
+                        if x <= 128 && y <= 64 {
+                            if y_channel > 180 {
+                                display.set_pixel(x as u32, 64-(y as u32), true);
+                            } else {
+                                display.set_pixel(x as u32, 64-(y as u32), false);
+                            }
+                        }
                     }
                 }
                 led.set_high();
+
+                // corner detection
+
+                // let xy = |flat_frame: &[u8], x, y| {
+                //     flat_frame[(W * y + x) as usize]
+                // };
+                
+
+                // let tresh = 20;
+                // let mut n;
+
+                // let is_brighter_or_darker = |p_center, p_target| {
+                //     let curr_tresh_up = p_center + tresh;
+                //     let curr_tresh_down = p_center - tresh;
+                //     curr_tresh_down >= p_target || curr_tresh_up <= p_target
+                // };
+
+                // for y in 3..((flat_frame.len()/W as usize) - 3) {
+                //     for x in 3..(W - 3) {
+                //         n = 0;
+                //         let p_center = xy(&flat_frame, x, y);
+                        
+                //         // orthogonal y
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x, y - 3)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x, y + 3)) {n = n + 1};
+                //         if n < 1 {continue};
+                        
+                //         // orthogonal x
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x - 3, y)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x + 3, y)) {n = n + 1};
+                //         if n < 3 {continue};
+
+                //         // diagonal
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x - 2, y - 2)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x - 2, y + 2)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x + 2, y - 2)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x + 2, y + 2)) {n = n + 1};
+
+                //         // orthogonal with x shifted
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x - 1, y - 3)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x + 1, y - 3)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x - 1, y + 3)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x + 1, y + 3)) {n = n + 1};
+
+                //         // orthogonal with y shifted
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x - 3, y - 1)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x - 3, y + 1)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x + 3, y - 1)) {n = n + 1};
+                //         if is_brighter_or_darker(p_center, xy(&flat_frame, x + 3, y + 1)) {n = n + 1};
+
+                //         if n < 12 {continue};
+                        
+                //         // println!("x:{},y:{}", x, y);
+                //         flat_frame[(W * y + x) as usize] = 0;
+                //         if x <= 128 && y <= 64 {
+                //             // flat_frame[(W * (y + 1) + x) as usize] = 255;
+                //             // flat_frame[(W * (y - 1) + x) as usize] = 255;
+                //             // flat_frame[(W * y + (x + 1)) as usize] = 255;
+                //             // flat_frame[(W * y + (x - 1)) as usize] = 255;
+
+                //             // draw_xy(x, y)
+                //             // display.set_pixel(x as u32, 64-(y as u32), true);
+                //         }
+                //     }
+                // }
+
+
                 display.flush().unwrap();
 
                 for p in flat_frame {
                     block!(tx.write(p)).ok();
+                    delay(10);
                 }
 
             }

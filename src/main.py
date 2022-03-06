@@ -21,7 +21,7 @@ check the status of you bluetooth:
 Manage your bluetooth connections:
 > sudo bluetoothctl
 
-From the new prompt, scan for devices
+From the new prompt, scan for devices. Make HC-05 is not connected to other controller
 >[bluetooth]# scan on
 
 Pair using:
@@ -44,28 +44,34 @@ def grab_image():
   get data from bluetooth<>serial
   return PIL image
   """
-  with serial.Serial('/dev/rfcomm0', 19200, timeout=20) as ser:
+  h = 72
+  w = 87
+  with serial.Serial('/dev/rfcomm0', 57600, timeout=5) as ser:
     time.sleep(0.2)
     ser.flush()
     #print(ser.name)
     time.sleep(0.2)
     ser.write(b'x')
     time.sleep(0.2)
-    data = ser.read(8192)
+    data = ser.read(w*h)
+    print(len(data))
 
-  #img = Image.new('L', (128, 64))
-  #img.putdata(data)
-  #img = img.transpose(Image.FLIP_TOP_BOTTOM)
-  #img.save('../test.bmp')
+  img = Image.new('L', (w, h))
+  img.putdata(data)
+  img = img.transpose(Image.FLIP_TOP_BOTTOM)
+  img.save('../../test.bmp')
   return img
-  #curl -s -X POST https://api.telegram.org/bot{}/sendMessage -d chat_id={} -d text="blah"
+  
   
 def post_msg():
-  img = Image.open('../test.bmp')
+  #img = Image.open('../test.bmp')
+  
+  img = grab_image()
   buf = io.BytesIO()
   buf.name = 'img.jpeg'
   img.save(buf, format='JPEG')
   buf.seek(0)
+  
   files = {'photo': buf}
 
   r = requests.post(f"https://api.telegram.org/bot{telegram_secrets.token}/sendPhoto", # sendMessage to text only
@@ -76,4 +82,5 @@ def post_msg():
   print(r.status_code)
 
 if __name__ == '__main__':
-  post_msg()
+  #post_msg()
+  grab_image()

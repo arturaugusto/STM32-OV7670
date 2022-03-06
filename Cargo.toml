@@ -35,5 +35,5 @@ display-interface-spi = "0.4.1"
 
 
 [dependencies.stm32f1xx-hal]
-version = "0.8.0"
+version = "0.9.0"
 features = ["rt", "stm32f103", "medium", "stm32-usbd"]
